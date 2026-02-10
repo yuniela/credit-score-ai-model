@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  trainer:
+    image: credit-score-train
+    build:
+      context: .
+      dockerfile: Dockerfile.train
+    profiles:
+      - train
+    volumes:
+      - .:/app
+    command: python app.py
+
+  api:
+    image: credit-score-api
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    profiles:
+      - serve
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    command: uvicorn api:app --host 0.0.0.0 --port 8000

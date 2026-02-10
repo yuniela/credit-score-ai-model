@@ -39,6 +39,7 @@ class CreditScorer:
         self.scaler = None
         self.label_encoders = {}
         self.fill_medians = {}
+        self.feature_columns = None 
         self.target_column = 'Credit_Score'
         self.model_registry = {
             "logistic_regression": LogisticRegression(max_iter=1000),
@@ -121,7 +122,14 @@ class CreditScorer:
                         except ValueError:
                             X[col] = X[col].map(lambda x: x if x in le.classes_ else le.classes_[0])
                             X[col] = le.transform(X[col])
+            if not fit and self.feature_columns is not None:
+                for col in self.feature_columns:
+                    if col not in X.columns:
+                        X[col] = 0
 
+                X = X[self.feature_columns]
+            X = X.apply(pd.to_numeric, errors="coerce")
+            X = X.fillna(0)
             if fit:
                 self.scaler = StandardScaler()
                 X = pd.DataFrame(self.scaler.fit_transform(X), columns=X.columns)
@@ -152,6 +160,7 @@ class CreditScorer:
         start_time = time.time()
         try:
             X, y = self.preprocess(data, fit=True)
+            self.feature_columns = X.columns.tolist()
             X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, test_size=0.2, random_state=42)
 
             nan_rows = X_train.isnull().any(axis=1)
@@ -184,8 +193,19 @@ class CreditScorer:
 
             y_pred = self.model.predict(X_test)
             acc = accuracy_score(y_test, y_pred)
+            report = classification_report(y_test, y_pred, output_dict=True)
+            cm = confusion_matrix(y_test, y_pred)
 
             latency = (time.time() - start_time) * 1000
+
+            self.training_metrics = {
+                "accuracy": float(acc),
+                "classification_report": report,
+                "confusion_matrix": cm.tolist()
+            }
+
+            self.training_distribution = y.value_counts(normalize=True).to_dict()
+
 
             logger.info(json.dumps({
                 "event": "model_trained",
@@ -194,6 +214,8 @@ class CreditScorer:
                 "test_size": len(X_test),
                 "accuracy": float(acc),
                 "latency_ms": latency,
+                "classification_report": report,
+                "confusion_matrix": cm.tolist(),
                 "timestamp": datetime.utcnow().isoformat()
             }))
 
@@ -274,7 +296,10 @@ class CreditScorer:
                 'model': self.model,
                 'scaler': self.scaler,
                 'encoders': self.label_encoders,
-                'fill_medians': self.fill_medians
+                'fill_medians': self.fill_medians,
+                'feature_columns': self.feature_columns,
+                'training_metrics': getattr(self, "training_metrics", None),
+                'training_distribution': getattr(self, "training_distribution", None)
             }, f"{filename}.joblib")
             logger.info(json.dumps({
                 "event": "model_saved",
@@ -292,6 +317,10 @@ class CreditScorer:
             self.scaler = data['scaler']
             self.label_encoders = data['encoders']
             self.fill_medians = data['fill_medians']
+            self.feature_columns = data.get('feature_columns')
+            self.training_metrics = data.get("training_metrics")
+            self.training_distribution = data.get("training_distribution")
+
             logger.info(json.dumps({
                 "event": "model_loaded",
                 "model_name": filename,
